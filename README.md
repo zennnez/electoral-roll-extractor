@@ -81,16 +81,18 @@ flowchart TD
 
 ### Installation
 
-```bash
-# Clone the repository
-git clone https://github.com/neha-nambiar/electoral-roll-extractor.git
-cd electoral-roll-extractor
+- Clone the repository
+  ```bash
+  git clone https://github.com/neha-nambiar/electoral-roll-extractor.git
+  cd electoral-roll-extractor
+  ```
 
-# Install dependencies
-pip install -r requirements.txt
-
-# Install Tesseract OCR and Poppler
-```
+- Install dependencies
+  ```python
+  pip install -r requirements.txt
+  ```
+  
+- Download and install Tesseract OCR and Poppler for your system
 
 ### Configuration
 
@@ -102,6 +104,14 @@ TESSERACT_CMD = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
 POPPLER_PATH = r'path\to\poppler\bin'
 ```
 
+### Usage
+
+- Place the electoral roll PDF you want to process inside the `electoral-roll-extractor/data/input/` directory.
+- Run the script:
+  ```python
+  python main.py
+  ```
+- The pipeline will process the input PDF and generate structured outputs (CSV/Excel) in the output directory `electoral-roll-extractor/data/output/`.
 
 ### Project Structure
 
