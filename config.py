@@ -25,7 +25,7 @@ EXCEL_OUTPUT_PATH = OUTPUT_DIR / "processed_data.xlsx"
 
 # OCR Configuration
 TESSERACT_CMD = r'C:\Program Files\Tesseract-OCR\tesseract.exe'  # Adjust for your system
-POPPLER_PATH = r'C:\Program Files (x86)\poppler-0.68.0\bin'  # Adjust for your system
+POPPLER_PATH = r'C:\Program Files\poppler-25.07.0\Library\bin'  # Adjust for your system
 
 # Image processing parameters
 IMAGE_PARAMS = {
