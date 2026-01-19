@@ -29,7 +29,7 @@ from extractor.image_processor import (
     find_inner_boxes,
     create_debug_image
 )
-from extractor.text_extractor import process_voter_box
+from extractor.text_extractor import process_voter_box, fix_page_ocr_numbers
 from extractor.data_processor import process_raw_data
 
 def setup_logging():
@@ -109,21 +109,29 @@ def parse_arguments():
         help="Enable debug mode with additional output and visualizations"
     )
     
+    parser.add_argument(
+        "--numocr",
+        action="store_true",
+        help="Use OCR numbers instead of sequential numbering"
+    )
+    
     return parser.parse_args()
 
 
-def extract_data_from_pdf(pdf_path):
+def extract_data_from_pdf(pdf_path, use_ocr_numbers=False):
     """
     Extract voter information from a PDF file.
     
     Args:
         pdf_path: Path to the PDF file.
+        use_ocr_numbers: Whether to use OCR numbers instead of sequential numbering
         
     Returns:
         A list of dictionaries containing extracted voter information.
     """
     logger = logging.getLogger(__name__)
     logger.info(f"Starting data extraction from: {pdf_path}")
+    logger.info(f"Using {'OCR' if use_ocr_numbers else 'sequential'} numbers")
     
     # Convert PDF to images
     logger.info("Converting PDF to images...")
@@ -135,6 +143,9 @@ def extract_data_from_pdf(pdf_path):
     
     # Container for extracted data
     all_data = []
+    prev_box_data = None
+    total_boxes = 0
+    valid_boxes = 0
     
     # Process each page
     for page_idx, image in enumerate(tqdm(images, desc="Processing pages")):
@@ -146,13 +157,21 @@ def extract_data_from_pdf(pdf_path):
         
         # Find voter boxes in the page
         boxes = find_boxes(preprocessed)
-        logger.info(f"Found {len(boxes)} voter boxes on page {page_idx+1}")
+        total_boxes += len(boxes)
+        logger.info(f"Found {len(boxes)} potential voter boxes on page {page_idx+1}")
+        
+        # Sort boxes from top to bottom, left to right
+        boxes = sorted(boxes, key=lambda b: (b[1], b[0]))
         
         # Save debug image of all boxes
         if config.IMAGE_PARAMS["save_debug_images"]:
             debug_img = create_debug_image(img, boxes)
             debug_path = os.path.join(config.DEBUG_DIR, f"page_{page_idx+1}_boxes.png")
             cv2.imwrite(debug_path, debug_img)
+        
+        # Container for page data
+        page_data = []
+        page_valid_boxes = 0
         
         # Process each box
         for box_idx, box in enumerate(tqdm(boxes, desc=f"Page {page_idx+1} boxes", leave=False)):
@@ -167,30 +186,50 @@ def extract_data_from_pdf(pdf_path):
             if inner_boxes:
                 inner_box = inner_boxes[0]
                 
-                # Extract data from the box
-                box_data = process_voter_box(img, box, inner_box)
+                # Extract data from the box with additional parameters
+                box_data = process_voter_box(
+                    img=img, 
+                    box=box, 
+                    inner_box=inner_box,
+                    current_box_index=box_idx,
+                    page_number=page_idx + 1,
+                    prev_box_data=prev_box_data,
+                    use_ocr_numbers=use_ocr_numbers
+                )
                 
-                # Add metadata
-                box_data["page"] = page_idx + 1
-                box_data["box"] = box_idx + 1
-                
-                # Add to collection
-                all_data.append(box_data)
-                
-                # Save debug image at intervals
-                if (config.IMAGE_PARAMS["save_debug_images"] and 
-                    box_idx % config.IMAGE_PARAMS["debug_image_interval"] == 0):
+                # Only process valid boxes
+                if box_data is not None:
+                    # Add metadata
+                    box_data["page"] = page_idx + 1
+                    box_data["box"] = box_idx + 1
                     
-                    debug_img = create_debug_image(img, [box], 0, inner_box)
-                    debug_path = os.path.join(
-                        config.DEBUG_DIR, 
-                        f"page_{page_idx+1}_box_{box_idx+1}.png"
-                    )
-                    cv2.imwrite(debug_path, debug_img)
-            else:
-                logger.warning(f"No inner box found in box {box_idx+1} on page {page_idx+1}")
+                    # Add to page data
+                    page_data.append(box_data)
+                    prev_box_data = box_data
+                    page_valid_boxes += 1
+                    valid_boxes += 1
+                    
+                    # Save debug image at intervals
+                    if (config.IMAGE_PARAMS["save_debug_images"] and 
+                        box_idx % config.IMAGE_PARAMS["debug_image_interval"] == 0):
+                        
+                        debug_img = create_debug_image(img, [box], 0, inner_box)
+                        debug_path = os.path.join(
+                            config.DEBUG_DIR, 
+                            f"page_{page_idx+1}_box_{box_idx+1}.png"
+                        )
+                        cv2.imwrite(debug_path, debug_img)
+        
+        # Fix OCR numbers for the entire page if using OCR mode
+        if use_ocr_numbers and page_data:
+            page_data = fix_page_ocr_numbers(page_data)
+        
+        # Add page data to all data
+        all_data.extend(page_data)
+        
+        logger.info(f"Processed {page_valid_boxes} valid voter boxes out of {len(boxes)} potential boxes on page {page_idx+1}")
     
-    logger.info(f"Extraction complete. Extracted data from {len(all_data)} voter entries")
+    logger.info(f"Extraction complete. Found {valid_boxes} valid voter entries out of {total_boxes} potential boxes across {len(images)} pages")
     return all_data
 
 
@@ -256,7 +295,7 @@ def main():
         configure_environment()
         
         # Extract data from PDF
-        data = extract_data_from_pdf(args.pdf)
+        data = extract_data_from_pdf(args.pdf, use_ocr_numbers=args.numocr)
         
         # Save raw data to CSV
         raw_df = save_raw_data(data, args.csv)

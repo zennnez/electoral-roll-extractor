@@ -8,7 +8,7 @@ import numpy as np
 import pytesseract
 from PIL import Image, ImageEnhance
 import logging
-from typing import Dict, Any, Tuple
+from typing import Dict, Any, Tuple, List
 
 from config import IMAGE_PARAMS
 from extractor.image_processor import remove_watermark
@@ -116,21 +116,64 @@ def extract_text(
         return ""
 
 
+def fix_page_ocr_numbers(page_data: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """
+    Fix OCR numbers in a page by ensuring they form a sequential series.
+    
+    Args:
+        page_data: List of voter data dictionaries for a single page
+        
+    Returns:
+        List of voter data with corrected OCR numbers
+    """
+    if not page_data:
+        return page_data
+        
+    # Sort by box position (they should already be sorted)
+    page_data = sorted(page_data, key=lambda x: x['box'])
+    
+    # Get all OCR numbers that look valid
+    valid_numbers = []
+    for entry in page_data:
+        try:
+            num = int(entry['ocr_number'])
+            valid_numbers.append(num)
+        except (ValueError, TypeError):
+            continue
+            
+    if not valid_numbers:
+        return page_data
+        
+    # Find the most common difference between consecutive numbers
+    diffs = [valid_numbers[i+1] - valid_numbers[i] for i in range(len(valid_numbers)-1)]
+    if not diffs:
+        return page_data
+        
+    # Most common difference should be 1
+    expected_diff = 1
+    
+    # Start with the first valid number
+    expected_number = valid_numbers[0]
+    
+    # Fix the series
+    for entry in page_data:
+        entry['number'] = str(expected_number)
+        expected_number += expected_diff
+        
+    return page_data
+
 def process_voter_box(
     img: np.ndarray,
     box: Tuple[int, int, int, int],
-    inner_box: Tuple[int, int, int, int]
+    inner_box: Tuple[int, int, int, int],
+    current_box_index: int,
+    page_number: int,
+    prev_box_data: Dict[str, Any] = None,
+    use_ocr_numbers: bool = False
 ) -> Dict[str, Any]:
     """
     Process a voter information box and extract all relevant text fields.
-
-    Args:
-        img: The original image in BGR format.
-        box: The coordinates of the voter box (x, y, width, height).
-        inner_box: The coordinates of the inner box containing the voter number.
-
-    Returns:
-        A dictionary containing the extracted information.
+    Returns None if the box appears to be fake/empty.
     """
     try:
         # Extract coordinates
@@ -144,7 +187,7 @@ def process_voter_box(
         clean_img = remove_watermark(box_img)
         
         # Extract voter number from inner box
-        number = extract_number(clean_img, ix, iy, iw, ih)
+        ocr_number = extract_number(clean_img, ix, iy, iw, ih)
         
         # Extract top right text (EPIC number)
         top_right_text = extract_text(clean_img, iw+10, 0, w-iw-10, ih)
@@ -162,6 +205,25 @@ def process_voter_box(
         lines = text.split('\n')
         lines = [line.strip() for line in lines if line.strip()]
         
+        # Check if this is likely a fake/empty box
+        total_text = ' '.join([ocr_number, top_right_text] + lines)
+        if len(total_text.strip()) < 5:  # Box has almost no text
+            return None
+            
+        # Determine number based on mode
+        if use_ocr_numbers:
+            number = ocr_number if ocr_number else ''
+        else:
+            # Calculate expected number based on previous box or box index
+            if prev_box_data and 'number' in prev_box_data and prev_box_data['number']:
+                try:
+                    expected_number = str(int(prev_box_data['number']) + 1)
+                except ValueError:
+                    expected_number = str(current_box_index + 1)
+            else:
+                expected_number = str(current_box_index + 1)
+            number = expected_number
+        
         # Ensure we have exactly 4 lines
         while len(lines) < 4:
             lines.append('')
@@ -172,6 +234,7 @@ def process_voter_box(
         # Return structured data
         return {
             'number': number,
+            'ocr_number': ocr_number,
             'top_right_text': top_right_text,
             'line1': lines[0],
             'line2': lines[1],
@@ -180,11 +243,4 @@ def process_voter_box(
         }
     except Exception as e:
         logger.error(f"Error processing voter box: {e}")
-        return {
-            'number': '',
-            'top_right_text': '',
-            'line1': '',
-            'line2': '',
-            'line3': '',
-            'line4': ''
-        }
+        return None  # Return None instead of empty dict for failed boxes

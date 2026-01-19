@@ -242,6 +242,137 @@ def extract_gender(text: str) -> Optional[str]:
         return None
 
 
+def fix_epic_part(epic_part: str, is_prefix: bool) -> str:
+    """
+    Fix common OCR errors in EPIC number parts.
+    
+    Args:
+        epic_part: Part of EPIC to fix (prefix or number part)
+        is_prefix: True if this is the prefix part (first 3 chars)
+        
+    Returns:
+        Corrected EPIC part
+    """
+    if not epic_part:
+        return epic_part
+        
+    if is_prefix:
+        # Common prefix corrections
+        prefix_corrections = {
+            'AZKA': 'AZK4',
+            'AZKO': 'AZK0',
+            'AZKI': 'AZK1',
+            'A2Z2K': 'AZK',
+            'A2ZK': 'AZK',
+            'AZ2K': 'AZK',
+            'CRJO': 'CRJ0',
+            'CRJI': 'CRJ1',
+            'CR2J': 'CRJ',
+            'C2RJ': 'CRJ',
+            'CRJ2': 'CRJ',
+            'CRU': 'CRJ',
+            'TS0': 'TSO',
+            '1S0': 'TSO',
+            '1SO': 'TSO',
+            'ORJ': 'CRJ',
+            'CRY': 'CRJ',
+            'ORU': 'CRJ',
+            'UR0': 'URO'
+        }
+        
+        # First try exact matches
+        if epic_part.upper() in prefix_corrections:
+            return prefix_corrections[epic_part.upper()]
+            
+        # Then try pattern matching for AZK or CRJ
+        if any(x in epic_part.upper() for x in ['AZK', 'CRJ']):
+            # Remove any digits from middle
+            clean = ''.join(c for c in epic_part if c.isalpha())
+            if 'AZK' in clean:
+                return 'AZK'
+            if 'CRJ' in clean:
+                return 'CRJ'
+                
+        return epic_part
+    else:
+        # Number part corrections (common OCR confusions)
+        corrections = {
+            'O': '0',
+            'I': '1',
+            'l': '1',
+            'Z': '2',
+            'A': '4',
+            'S': '5',
+            'G': '6',
+            'T': '7',
+            'B': '8'
+        }
+        
+        # Replace similar looking characters
+        result = ''
+        for c in epic_part:
+            if c in corrections:
+                result += corrections[c]
+            else:
+                result += c
+                
+        return result
+
+def validate_and_fix_epic(epic: str) -> str:
+    """
+    Validate and fix EPIC number according to rules:
+    1. Remove leading numbers
+    2. Fix common OCR errors
+    3. Ensure format: 3 letters + 7 numbers
+    
+    Args:
+        epic: EPIC number to validate and fix
+        
+    Returns:
+        Corrected EPIC number or empty string if invalid
+    """
+    if not epic:
+        return ''
+        
+    # Remove any whitespace
+    epic = epic.strip()
+    
+    # Remove leading numbers
+    while epic and epic[0].isdigit():
+        epic = epic[1:]
+        
+    if len(epic) < 3:
+        return ''
+        
+    # Split into prefix and number parts
+    prefix = epic[:3]
+    number_part = epic[3:]
+    
+    # Fix prefix (first 3 characters)
+    fixed_prefix = fix_epic_part(prefix, is_prefix=True)
+    
+    # Fix number part (rest of characters)
+    fixed_number = fix_epic_part(number_part, is_prefix=False)
+    
+    # Ensure number part is exactly 7 digits
+    if fixed_number.isdigit():
+        fixed_number = fixed_number[:7].zfill(7)
+    else:
+        # Try to extract just the digits
+        digits = ''.join(c for c in fixed_number if c.isdigit())
+        fixed_number = digits[:7].zfill(7)
+    
+    # Combine and validate final result
+    result = fixed_prefix + fixed_number
+    
+    # Final validation: 3 letters + 7 numbers
+    if (len(result) == 10 and 
+        result[:3].isalpha() and 
+        result[3:].isdigit()):
+        return result
+    return ''
+
+
 def process_raw_data(df: pd.DataFrame, required_columns: List[str]) -> pd.DataFrame:
     """
     Process the raw extracted data to create a structured DataFrame.
@@ -265,6 +396,10 @@ def process_raw_data(df: pd.DataFrame, required_columns: List[str]) -> pd.DataFr
         
         # Extract EPIC No from top_right_text
         processed_df['EPIC No'] = filtered_df['top_right_text'].str.replace(r'[^A-Z0-9]', '', regex=True)
+        
+        # Clean and validate EPIC numbers
+        if 'top_right_text' in df.columns:
+            df['top_right_text'] = df['top_right_text'].apply(validate_and_fix_epic)
         
         # Extract and format voter name
         processed_df['Voter Full Name'] = filtered_df['line1'].apply(extract_and_format_name)
