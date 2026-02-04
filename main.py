@@ -3,9 +3,10 @@ Electoral Roll Data Extractor
 
 This script extracts voter information from electoral roll PDFs, processes
 the extracted data, and outputs structured information to CSV and Excel files.
+It processes all PDF files in the input directory and creates corresponding output files with the same base filename.
 
 Usage:
-    python main.py 
+    python main.py [--input-dir INPUT_DIR] [--output-dir OUTPUT_DIR] [--debug] [--numocr]
 """
 import os
 import sys
@@ -66,10 +67,10 @@ def configure_environment():
     pytesseract.pytesseract.tesseract_cmd = config.TESSERACT_CMD
     logger.info(f"Tesseract path set to: {config.TESSERACT_CMD}")
     
-    # Verify PDF file exists
-    if not Path(config.DEFAULT_PDF_PATH).exists():
-        logger.error(f"PDF file not found: {config.DEFAULT_PDF_PATH}")
-        raise FileNotFoundError(f"PDF file not found: {config.DEFAULT_PDF_PATH}")
+    # Verify PDF directory exists
+    if not Path(config.INPUT_DIR).exists():
+        logger.error(f"PDF directory not found: {config.INPUT_DIR}")
+        raise FileNotFoundError(f"PDF directory not found: {config.INPUT_DIR}")
     
     # Verify Poppler path exists (if provided)
     if config.POPPLER_PATH and not Path(config.POPPLER_PATH).exists():
@@ -83,24 +84,17 @@ def parse_arguments():
     parser = argparse.ArgumentParser(description="Electoral Roll Data Extractor")
     
     parser.add_argument(
-        "--pdf", 
+        "--input-dir", 
         type=str,
-        default=str(config.DEFAULT_PDF_PATH),
-        help="Path to the electoral roll PDF file"
+        default=str(config.INPUT_DIR),
+        help="Directory containing electoral roll PDF files"
     )
     
     parser.add_argument(
-        "--csv", 
+        "--output-dir", 
         type=str,
-        default=str(config.CSV_OUTPUT_PATH),
-        help="Path to save the raw CSV output"
-    )
-    
-    parser.add_argument(
-        "--excel", 
-        type=str,
-        default=str(config.EXCEL_OUTPUT_PATH),
-        help="Path to save the processed Excel output"
+        default=str(config.OUTPUT_DIR),
+        help="Directory to save output files"
     )
     
     parser.add_argument(
@@ -117,6 +111,48 @@ def parse_arguments():
     
     return parser.parse_args()
 
+
+def get_pdf_files(input_dir):
+    """
+    Get all PDF files from the input directory.
+    
+    Args:
+        input_dir: Path to the directory containing PDF files.
+        
+    Returns:
+        List of PDF file paths.
+    """
+    logger = logging.getLogger(__name__)
+    input_path = Path(input_dir)
+    
+    if not input_path.exists():
+        logger.error(f"Input directory not found: {input_dir}")
+        return []
+    
+    pdf_files = list(input_path.glob("*.pdf"))
+    logger.info(f"Found {len(pdf_files)} PDF files in {input_dir}")
+    
+    return pdf_files
+
+
+def generate_output_paths(pdf_path, output_dir):
+    """
+    Generate output file paths based on the PDF filename.
+    
+    Args:
+        pdf_path: Path to the PDF file.
+        output_dir: Directory to save output files.
+        
+    Returns:
+        Tuple of (csv_path, excel_path).
+    """
+    pdf_name = Path(pdf_path).stem
+    output_path = Path(output_dir)
+    
+    csv_path = output_path / f"{pdf_name}.csv"
+    excel_path = output_path / f"{pdf_name}.xlsx"
+    
+    return csv_path, excel_path
 
 def extract_data_from_pdf(pdf_path, use_ocr_numbers=False):
     """
@@ -294,24 +330,68 @@ def main():
         # Configure environment
         configure_environment()
         
-        # Extract data from PDF
-        data = extract_data_from_pdf(args.pdf, use_ocr_numbers=args.numocr)
+        # Get all PDF files from input directory
+        pdf_files = get_pdf_files(args.input_dir)
         
-        # Save raw data to CSV
-        raw_df = save_raw_data(data, args.csv)
+        if not pdf_files:
+            logger.error("No PDF files found in the input directory")
+            return 1
         
-        # Process and save output
-        output_df = process_and_save_output(raw_df, args.excel)
+        # Process each PDF file
+        total_processed = 0
+        successful_files = []
+        failed_files = []
         
-        # Print summary
-        logger.info("=" * 50)
+        for pdf_file in pdf_files:
+            try:
+                logger.info(f"Processing file: {pdf_file.name}")
+                
+                # Generate output paths for this file
+                csv_path, excel_path = generate_output_paths(pdf_file, args.output_dir)
+                
+                # Extract data from PDF
+                data = extract_data_from_pdf(pdf_file, use_ocr_numbers=args.numocr)
+                
+                if not data:
+                    logger.warning(f"No data extracted from {pdf_file.name}")
+                    failed_files.append(pdf_file.name)
+                    continue
+                
+                # Save raw data to CSV
+                raw_df = save_raw_data(data, csv_path)
+                
+                # Process and save output
+                output_df = process_and_save_output(raw_df, excel_path)
+                
+                # Log success for this file
+                logger.info(f"Successfully processed {pdf_file.name}: {len(output_df)} voter entries")
+                successful_files.append(pdf_file.name)
+                total_processed += len(output_df)
+                
+            except Exception as e:
+                logger.error(f"Error processing {pdf_file.name}: {e}", exc_info=True)
+                failed_files.append(pdf_file.name)
+                continue
+        
+        # Print final summary
+        logger.info("=" * 60)
         logger.info(f"Electoral Roll Data Extraction Complete")
-        logger.info(f"Total voter entries processed: {len(output_df)}")
-        logger.info(f"Raw data saved to: {args.csv}")
-        logger.info(f"Processed data saved to: {args.excel}")
-        logger.info("=" * 50)
+        logger.info(f"Total PDF files found: {len(pdf_files)}")
+        logger.info(f"Successfully processed: {len(successful_files)}")
+        logger.info(f"Failed to process: {len(failed_files)}")
+        logger.info(f"Total voter entries processed: {total_processed}")
         
-        return 0
+        if successful_files:
+            logger.info(f"Successfully processed files: {', '.join(successful_files)}")
+        
+        if failed_files:
+            logger.warning(f"Failed to process files: {', '.join(failed_files)}")
+        
+        logger.info(f"Output files saved to: {args.output_dir}")
+        logger.info("=" * 60)
+        
+        return 0 if not failed_files else 1
+        
     except Exception as e:
         logger.error(f"Error in main execution: {e}", exc_info=True)
         return 1

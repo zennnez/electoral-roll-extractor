@@ -18,11 +18,6 @@ DEBUG_DIR = DATA_DIR / "debug"
 for directory in [INPUT_DIR, OUTPUT_DIR, DEBUG_DIR]:
     os.makedirs(directory, exist_ok=True)
 
-# File paths
-DEFAULT_PDF_PATH = INPUT_DIR / "electoral_roll_data.pdf"
-CSV_OUTPUT_PATH = OUTPUT_DIR / "extracted_data.csv"
-EXCEL_OUTPUT_PATH = OUTPUT_DIR / "processed_data.xlsx"
-
 # OCR Configuration
 TESSERACT_CMD = r'C:\Program Files\Tesseract-OCR\tesseract.exe'  # Adjust for your system
 POPPLER_PATH = r'C:\Program Files\poppler-25.07.0\Library\bin'  # Adjust for your system
